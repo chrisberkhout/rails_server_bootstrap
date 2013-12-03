@@ -1,0 +1,145 @@
+---
+# requires ansible >= 1.4
+
+# resources:
+#   http://sirupsen.com/setting-up-unicorn-with-nginx/
+#   http://stackoverflow.com/questions/4142936/git-clone-from-local-to-remote
+
+- name: setup box for rails app
+  hosts: all
+  user: ubuntu
+  sudo: true
+  handlers:
+
+  - name: restart nginx
+    service: name=nginx state=restarted
+
+  - name: restart postgresql
+    service: name=postgresql state=restarted
+
+  tasks:
+
+  # ansible - gather user names
+
+  - set_fact: sudo_user={{ ansible_user_id }}
+  - name: override ansible_user_id fact to be normal user instead of sudo user
+    setup: filter=ansible_user_id
+    sudo: false
+  - set_fact: normal_user={{ ansible_user_id }}
+
+  # basics
+
+  - name: install basic packages
+    apt: pkg={{ item }} state=present
+    with_items:
+    - git
+    - vim
+    - curl
+    - language-pack-en-base
+    - build-essential
+    - libpq-dev # for building pg gem
+    - libsqlite3-dev # for building sqlite3 gem
+    - nodejs # as javascript runtime for rails
+
+  # ruby
+
+  - name: install updated ruby
+    apt: pkg={{ item }} state=present
+    with_items:
+    - build-essential
+    - libssl-dev
+    - zlib1g-dev
+    - ruby1.9.1-dev
+    register: ruby_installation_task
+
+  - name: add updated ruby alternatives
+    command: >
+      /usr/sbin/update-alternatives
+        --install /usr/bin/ruby ruby /usr/bin/ruby1.9.1 400
+        --slave /usr/share/man/man1/ruby.1.gz ruby.1.gz /usr/share/man/man1/ruby1.9.1.1.gz
+        --slave /usr/bin/irb irb /usr/bin/irb1.9.1
+    when: ruby_installation_task.changed
+
+  - name: set updated ruby as default
+    command: /usr/sbin/update-alternatives --set {{ item }} /usr/bin/{{ item }}1.9.1
+    with_items:
+    - ruby
+    - gem
+    when: ruby_installation_task.changed
+
+  - name: install bundler
+    command: env LANG=en_AU.UTF-8 gem install bundler -v 1.2.3
+             creates=/var/lib/gems/1.9.1/gems/bundler-1.2.3/bundler.gemspec
+
+  # nginx
+
+  - name: create new groups
+    group: name={{ item }} state=present
+    with_items:
+    - nginx
+    - web
+
+  - name: add normal user to web group
+    user: name={{ normal_user }} groups=web state=present
+
+  - name: create nginx user, add to web group
+    user: name=nginx shell=/bin/false group=nginx groups=web state=present
+
+  - name: www dir
+    file: path=/var/www group=web mode=775 state=directory
+
+  - name: install nginx
+    apt: pkg={{ item }} state=present
+    with_items:
+    - nginx
+
+  - name: place nginx config file
+    template: src=templates/nginx.conf.j2 dest=/etc/nginx/nginx.conf
+              backup=yes
+    notify: restart nginx
+
+  - name: enable nginx as service
+    service: name=nginx enabled=yes
+
+  # postgresql
+
+  - apt: pkg=postgresql state=present
+
+  - name: allow all local users to connect to the DB via a UNIX domain socket as postgres
+    lineinfile: dest=/etc/postgresql/9.1/main/pg_hba.conf
+                regexp='local   all             postgres                                '
+                  line='local   all             postgres                                trust'
+                state=present backup=yes
+    notify: restart postgresql
+
+  - name: allow all local users to connect to the DB via IPv4 as any role
+    lineinfile: dest=/etc/postgresql/9.1/main/pg_hba.conf
+                regexp='host    all             all             127.0.0.1/32'
+                  line='host    all             all             127.0.0.1/32            trust'
+                state=present backup=yes
+    notify: restart postgresql
+
+  # git setup
+
+  - name: init git repo
+    command: git init railsapp
+             chdir=/var/www
+             creates=/var/www/railsapp/.git
+    sudo: false
+    register: repo_init
+
+  - name: allow pushes into remote repo
+    command: git config receive.denyCurrentBranch ignore
+             chdir=/var/www/railsapp
+    when: repo_init.changed
+    sudo: false
+
+  - name: place remote git hook
+    template: src=templates/post-receive.j2 dest=/var/www/railsapp/.git/hooks/post-receive mode=744 backup=yes
+    sudo: false
+
+  # app service
+
+  - name: place service definition for railsapp
+    template: src=templates/railsapp.conf.j2 dest=/etc/init/railsapp.conf mode=644 backup=yes
+

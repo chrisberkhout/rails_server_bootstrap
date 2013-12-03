@@ -1,0 +1,43 @@
+#!/bin/bash
+
+echo "Running post-receive on `hostname`..."
+
+set -e
+
+cd ..
+export GIT_DIR=$PWD/.git
+export GIT_WORK_TREE=$PWD
+
+set -x
+
+git reset --hard
+git submodule update --recursive --init
+
+bundle install --deployment
+RAILS_ENV=production bundle exec rake assets:precompile
+
+set +x
+
+echo '================================================================================'
+echo
+echo 'The code and gems are updated and the assests precompiled.'
+echo 'If you are ready to immediately restart unicorn, you can run:'
+echo
+echo '  rake deploy:restart'
+echo
+echo 'However, you may need to log in and perform manual steps first, such as:'
+echo
+echo '  rake deploy:ssh                                   # connect to the server'
+echo '  cd /var/www/railsapp                              # go to app'
+echo '  RAILS_ENV=production bundle exec rake db:create   # create DB'
+echo '  RAILS_ENV=production bundle exec rake db:migrate  # migrate DB'
+echo '  RAILS_ENV=production bundle exec rake db:seed     # seed DB'
+echo '  sudo service railsapp start                       # start app'
+echo '  kill -HUP   `cat tmp/pids/unicorn.pid`            # reload config and workers'
+echo '  kill -USR2  `cat tmp/pids/unicorn.pid`            # launch new unicorn'
+echo '  kill -WINCH `cat tmp/pids/unicorn.pid.oldbin`     # stop old unicorn workers'
+echo '  kill -QUIT  `cat tmp/pids/unicorn.pid.oldbin`     # stop old unicorn master'
+echo '  sudo service railsapp stop                        # stop app'
+echo
+echo '================================================================================'
+

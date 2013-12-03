@@ -1,0 +1,27 @@
+description "railsapp"
+
+# RESTARTING AND RESPAWNING:
+#
+# If using USR2 + QUIT to restart unicorn, upstart has no way to track its PID,
+# so upstart can't be used monitor and respawn unicorn.
+#
+# This config will start and stop unicorn at the appropriate times, and trust
+# it not to die in between.
+#
+# Unicorn worker reloads can be done with HUP, and full unicorn restarts with
+# USR2 + QUIT, both without downtime. http://unicorn.bogomips.org/SIGNALS.html
+
+start on virtual-filesystems
+stop on runlevel [06]
+
+setuid {{ normal_user }}
+setgid web
+
+chdir /var/www/railsapp
+
+env RAILS_ENV=production
+
+pre-start exec bundle exec unicorn_rails -c config/unicorn.rb -E production -D
+
+post-stop exec kill `cat tmp/pids/unicorn.pid`
+
